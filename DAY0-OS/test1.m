@@ -21,7 +21,7 @@ mprop = [ 1.0 3.0
           2.0 1.0 ];
 
 % Prescribed loads mat(node,dof,force)
-loads = [ 3   2 -0.01 ];
+loads = [ 3   2 -0.01];
 
 % Boundary conditions mat(node,dof,disp)   
 bound = [ 1  1  0.0
