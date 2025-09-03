@@ -65,7 +65,27 @@ def buildload(X, IX, ne, P, loads, mprop):
 
 def buildstiff(X, IX, ne, mprop, K):
     for e in range(ne):
-        print(f'ERROR in fea/buildstiff: build stiffness matrix')
+        # Define element parameters
+        dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
+        dy = X[int(IX[e,1])-1,1] - X[int(IX[e,0])-1,1]
+        L = np.sqrt(dx**2 + dy**2)
+
+        # Assemble element stiffness matrix
+        Ae = mprop[int(IX[e,2])-1,1]
+        Ee = mprop[int(IX[e,2])-1,0]
+        ke = (Ae*Ee/L**3) * np.array([[dx**2, dx*dy, -dx**2, -dx*dy],
+                                      [dx*dy, dy**2, -dx*dy, -dy**2],
+                                      [-dx**2, -dx*dy, dx**2, dx*dy],
+                                      [-dx*dy, -dy**2, dx*dy, dy**2]])
+        
+        # Adding into global stiffeness matrix
+        ind = [int(IX[e,0]*2)-2, int(IX[e,1]*2)-2] # Index of each sub-atrix
+        for ig, il in enumerate(range(0,2,2)):
+            for jg, jl in enumerate(range(0,2,2)):
+                K[ind[ig],ind[jg]] += ke[il,jl]
+                K[ind[ig]+1,ind[jg]] += ke[il+1,jl]
+                K[ind[ig],ind+1[jg]] += ke[il,jl+1]
+                K[ind[ig]+1,ind+1[jg]] += ke[il+1,jl+1]
     return K
 
 def enforce(K, P, bound):
