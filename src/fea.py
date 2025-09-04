@@ -104,16 +104,51 @@ def enforce(K, P, bound):
 
         
         K_mod[dof, dof] += alpha #will add infinity to the element
-        P_mod[dof] += alpha * disp #will add infinity to the element 
-
         #spør om man skal legge til for p-matrisen også eller kun for k-matrisen. 
 
     return K_mod, P_mod 
 
 def recover(mprop, X, IX, D, ne, strain, stress):
     for e in range(ne):
+
+        dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
+        dy = X[int(IX[e,1])-1,1] - X[int(IX[e,0])-1,1]
+        L = np.sqrt(dx**2 + dy**2)
+        if L == 0:
+            strain[e,0] = 0.0
+            stress[e,0] = 0.0
+
+        continue
+        midx = int(IX[e, 2]) - 1    
+        E    = mprop[midx, 0]       
+
+        length_vector = np.array([-dx, -dy, dx, dy])
+
+        n1 = int(IX[e, 0]) - 1   
+        n2 = int(IX[e, 1]) - 1   
+
+    
+        de = np.array([
+            D[2*n1, 0],     
+            D[2*n1 + 1, 0], 
+            D[2*n2, 0],    
+            D[2*n2 + 1, 0]  
+        ])
+
+        B0_T = (1/L**2) * length_vector
+
+        eps = float(B0_T @ de)   
+        sig = E * eps            
+
+        strain[e, 0] = eps
+        stress[e, 0] = sig
+
         print(f'ERROR in fea/recover: calculate strain and stress')
     return strain, stress
+
+
+
+
 
 def PlotStructure(X, IX, ne, neqn, bound, loads, D, stress):
         # Plot the deformed and undeformed structure
