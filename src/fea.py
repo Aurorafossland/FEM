@@ -88,10 +88,27 @@ def buildstiff(X, IX, ne, mprop, K):
                 K[ind[ig]+1,ind+1[jg]] += ke[il+1,jl+1]
     return K
 
+
+
 def enforce(K, P, bound):
-    for i in range(bound.shape[0]):
-        print(f'ERROR in fea/enforce: enforce boundary conditions')
-    return K, P
+    alpha=1e12 #infinity
+    ndof_total = K.shape[0] #gets the number of degrees of freedom. shape will give a tuple with (i,j)
+
+    K_mod = K.copy() #makes a copy of K
+    P_mod = P.copy() #Makes a copy of P
+
+   
+    for i in range(bound.shape[0]): #Iterates through the BC-matrix
+        node, ldof, disp = int(bound[i,0]), int(bound[i,1]), bound[i,2] #gets out the relevant values from the bound-matrix
+        dof = (node - 1) * 2 + (ldof - 1) #will find the degrees of freedom on the global matrix
+
+        
+        K_mod[dof, dof] += alpha #will add infinity to the element
+        P_mod[dof] += alpha * disp #will add infinity to the element 
+
+        #spør om man skal legge til for p-matrisen også eller kun for k-matrisen. 
+
+    return K_mod, P_mod 
 
 def recover(mprop, X, IX, D, ne, strain, stress):
     for e in range(ne):
