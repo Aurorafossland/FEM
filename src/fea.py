@@ -60,6 +60,9 @@ class Fea:
 
 def buildload(X, IX, ne, P, loads, mprop):
     for i in range(loads.shape[0]):
+        node, ldof, force = int(loads[i,0]), int(loads[i,1]), loads[i,2]
+        dof = (node - 1) * 2 + (ldof - 1)
+        P[dof] += force
         print(f'ERROR in fea/buildload: build load vector')
     return P
 
@@ -79,13 +82,19 @@ def buildstiff(X, IX, ne, mprop, K):
                                       [-dx*dy, -dy**2, dx*dy, dy**2]])
         
         # Adding into global stiffeness matrix
-        ind = [int(IX[e,0]*2)-2, int(IX[e,1]*2)-2] # Index of each sub-atrix
-        for ig, il in enumerate(range(0,2,2)):
-            for jg, jl in enumerate(range(0,2,2)):
-                K[ind[ig],ind[jg]] += ke[il,jl]
-                K[ind[ig]+1,ind[jg]] += ke[il+1,jl]
-                K[ind[ig],ind+1[jg]] += ke[il,jl+1]
-                K[ind[ig]+1,ind+1[jg]] += ke[il+1,jl+1]
+        # --- FIX: ind should be [2*n1, 2*n1+1, 2*n2, 2*n2+1] ---
+        n1 = int(IX[e,0])-1
+        n2 = int(IX[e,1])-1
+        edof = [2*n1, 2*n1+1, 2*n2, 2*n2+1]  # <-- minimal fix
+
+        # Assemble into global stiffness matrix
+        for i in range(4):
+            for j in range(4):
+                K[edof[i], edof[j]] += ke[i, j]
+
+    np.set_printoptions(precision=3, suppress=True)
+    print("Stiffness matrix K (dense):")
+    print(K.toarray())
     return K
 
 
