@@ -51,6 +51,8 @@ class Fea:
         Kmatr = buildstiff(X, IX, ne, mprop, Kmatr)  # Build global stiffness matrix
         
         Kmatr, P = enforce(Kmatr, P, bound)          # Enforce boundary conditions
+
+        D = spsolve(Kmatr, P).reshape(-1,1)   #Global displacementvector
         
         strain, stress = recover(mprop, X, IX, D, ne, strain, stress)  # Calculate element stress and strain
 
@@ -118,17 +120,19 @@ def enforce(K, P, bound):
     return K_mod, P_mod 
 
 def recover(mprop, X, IX, D, ne, strain, stress):
+
     for e in range(ne):
 
         dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
         dy = X[int(IX[e,1])-1,1] - X[int(IX[e,0])-1,1]
         L = np.sqrt(dx**2 + dy**2)
+
         if L == 0:
             strain[e,0] = 0.0
             stress[e,0] = 0.0
+            continue
 
-        continue
-        midx = int(IX[e, 2]) - 1    
+        midx = int(IX[e, 2]) - 1     #index
         E    = mprop[midx, 0]       
 
         length_vector = np.array([-dx, -dy, dx, dy])
@@ -149,10 +153,11 @@ def recover(mprop, X, IX, D, ne, strain, stress):
         eps = float(B0_T @ de)   
         sig = E * eps            
 
-        strain[e, 0] = eps
-        stress[e, 0] = sig
-
-        print(f'ERROR in fea/recover: calculate strain and stress')
+        strain[e, 0] += eps
+        stress[e, 0] += sig
+    print(f'D: {D}')
+    print(strain)
+    print(stress)
     return strain, stress
 
 
