@@ -63,7 +63,7 @@ def buildload(X, IX, ne, P, loads, mprop):
         node, ldof, force = int(loads[i,0]), int(loads[i,1]), loads[i,2]
         dof = (node - 1) * 2 + (ldof - 1)
         P[dof] += force
-        print(f'ERROR in fea/buildload: build load vector')
+        # print(f'ERROR in fea/buildload: build load vector')
     return P
 
 def buildstiff(X, IX, ne, mprop, K):
@@ -123,11 +123,11 @@ def recover(mprop, X, IX, D, ne, strain, stress):
         dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
         dy = X[int(IX[e,1])-1,1] - X[int(IX[e,0])-1,1]
         L = np.sqrt(dx**2 + dy**2)
-        if L == 0:
-            strain[e,0] = 0.0
-            stress[e,0] = 0.0
+        # if L == 0:
+        #     strain[e,0] = 0.0
+        #     stress[e,0] = 0.0
+        #     continue
 
-        continue
         midx = int(IX[e, 2]) - 1    
         E    = mprop[midx, 0]       
 
@@ -152,7 +152,9 @@ def recover(mprop, X, IX, D, ne, strain, stress):
         strain[e, 0] = eps
         stress[e, 0] = sig
 
-        print(f'ERROR in fea/recover: calculate strain and stress')
+        #print(f'ERROR in fea/recover: calculate strain and stress')
+    print("Strain:", strain)
+    print("Stress:", stress)
     return strain, stress
 
 

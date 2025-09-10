@@ -9,6 +9,6 @@ print ("Current working dir : %s" % os.getcwd())
 from src.fea import Fea
 
 # Define input file (the standard FEM course Matlab input format)
-input_file = 'example1.m'
+input_file = 'group19.m'
 # Perform FEA
 fea = Fea(input_file)
