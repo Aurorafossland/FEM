@@ -65,7 +65,7 @@ def buildload(X, IX, ne, P, loads, mprop):
         node, ldof, force = int(loads[i,0]), int(loads[i,1]), loads[i,2]
         dof = (node - 1) * 2 + (ldof - 1)
         P[dof] += force
-        print(f'ERROR in fea/buildload: build load vector')
+        # print(f'ERROR in fea/buildload: build load vector')
     return P
 
 def buildstiff(X, IX, ne, mprop, K):
