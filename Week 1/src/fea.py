@@ -182,7 +182,16 @@ def PlotStructure(X, IX, ne, neqn, bound, loads, D, stress):
             edof = np.array([2*n1, 2*n1 + 1, 2*n2, 2*n2 + 1])
             xx_def = xx + scale*D[edof[0:4:2]-2,0]
             yy_def = yy + scale*D[edof[1:4:2]-2,0]
-            plt.plot(xx_def, yy_def, 'b', linewidth=lw)
+
+            # --- Color depending on stress ---
+            if np.abs(stress[e, 0]) < 1e-6:
+                color = 'g'
+            elif stress[e, 0] > 0:
+                color = 'b'  # Tension: blue
+            else:
+                color = 'r'  # Compression: red
+
+            plt.plot(xx_def, yy_def, color, linewidth=lw)
 
         plt.legend(["Undeformed", "Deformed"], loc="upper right")
 
