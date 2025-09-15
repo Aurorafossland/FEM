@@ -42,6 +42,9 @@ class Fea:
         P = np.zeros((neqn,1))           # Force vector
         D = np.zeros((neqn,1))           # Displacement vector
         R = np.zeros((neqn,1))           # Residual vector
+
+
+        
         strain = np.zeros((ne,1))        # Element strain vector
         stress = np.zeros((ne,1))        # Element stress vector
 
@@ -50,22 +53,26 @@ class Fea:
 
         Kmatr = buildstiff(X, IX, ne, mprop, Kmatr)  # Build global stiffness matrix
         
-        Kmatr, P = enforce(Kmatr, P, bound)          # Enforce boundary conditions
+        # --- ta vare på K og P før enforce ---
+        # --- ta vare på K og P før enforce ---
+        K_original = Kmatr.copy()
+        P_original = P.copy()
 
-        D = spsolve(Kmatr, P).reshape(-1,1)   #Global displacementvector
-        
-        strain, stress = recover(mprop, X, IX, D, ne, strain, stress)  # Calculate element stress and strain
+        Kmatr, P = enforce(Kmatr, P, bound)
+        D = spsolve(Kmatr, P).reshape(-1,1)
 
-        # Plot results
-        PlotStructure(X, IX, ne, neqn, bound, loads, D, stress)  # Plot structure
+        # === Beregn og print reaksjonskrefter ===
+        R = recover_reactions(K_original, P_original, D, bound)
 
+        strain, stress = recover(mprop, X, IX, D, ne, strain, stress)
+        PlotStructure(X, IX, ne, neqn, bound, loads, D, stress)
 
 def buildload(X, IX, ne, P, loads, mprop):
     for i in range(loads.shape[0]):
         node, ldof, force = int(loads[i,0]), int(loads[i,1]), loads[i,2]
         dof = (node - 1) * 2 + (ldof - 1)
         P[dof] += force
-        # print(f'ERROR in fea/buildload: build load vector')
+        print(f'ERROR in fea/buildload: build load vector')
     return P
 
 def buildstiff(X, IX, ne, mprop, K):
@@ -118,11 +125,9 @@ def enforce(K, P, bound):
         #spør om man skal legge til for p-matrisen også eller kun for k-matrisen. 
 
     return K_mod, P_mod 
-
 def recover(mprop, X, IX, D, ne, strain, stress):
 
     for e in range(ne):
-
         dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
         dy = X[int(IX[e,1])-1,1] - X[int(IX[e,0])-1,1]
         L = np.sqrt(dx**2 + dy**2)
@@ -132,36 +137,89 @@ def recover(mprop, X, IX, D, ne, strain, stress):
             stress[e,0] = 0.0
             continue
 
-        midx = int(IX[e, 2]) - 1     #index
-        E    = mprop[midx, 0]       
+        midx = int(IX[e, 2]) - 1     # material index
+        E    = mprop[midx, 0]
 
         length_vector = np.array([-dx, -dy, dx, dy])
 
-        n1 = int(IX[e, 0]) - 1   
-        n2 = int(IX[e, 1]) - 1   
+        n1 = int(IX[e, 0]) - 1
+        n2 = int(IX[e, 1]) - 1
 
-    
         de = np.array([
-            D[2*n1, 0],     
-            D[2*n1 + 1, 0], 
-            D[2*n2, 0],    
-            D[2*n2 + 1, 0]  
+            D[2*n1, 0],
+            D[2*n1 + 1, 0],
+            D[2*n2, 0],
+            D[2*n2 + 1, 0]
         ])
 
         B0_T = (1/L**2) * length_vector
 
-        eps = float(B0_T @ de)   
-        sig = E * eps            
+        eps = float(B0_T @ de)
+        sig = E * eps
 
-        strain[e, 0] += eps
-        stress[e, 0] += sig
+        strain[e, 0] = eps
+        stress[e, 0] = sig
+
+    
+ 
+    node_C = 9
+    dof_vC = 2*(node_C-1) + 1   # vertikal dof
+    vC = float(D[dof_vC, 0])    # i meter
+    print(f"\nNode C (node {node_C}) vertical displacement: {vC:.6f} m ({vC*1e3:.2f} mm)")
+
+    # --- NY DEL: sikkerhetssjekk ---
+    yield_limit = {1: 335e6, 2: 250e6}  # Pa
+    material_name = {1: "Steel (mild)", 2: "Aluminium"}
+    sig = stress.reshape(-1)
+    props = IX[:, 2].astype(int)
+
+    print("\n" + "="*60)
+    print("MAX STRESS PER MATERIAL (abs), compared to yield")
+    print("="*60)
+
+    overall_safe = True
+    for m in [1, 2]:
+        mask = (props == m)
+        if not np.any(mask):
+            continue
+        idx_local = np.argmax(np.abs(sig[mask]))
+        elem_indices = np.where(mask)[0]
+        e_star = int(elem_indices[idx_local])
+        sigma_star = float(sig[e_star])
+        sigma_abs = abs(sigma_star)
+        ys = yield_limit[m]
+
+        n1, n2 = int(IX[e_star, 0]), int(IX[e_star, 1])
+        state = "tension" if sigma_star >= 0 else "compression"
+
+        print(f"{material_name[m]}:")
+        print(f"  -> Element #{e_star+1} (nodes {n1}-{n2}) has max |σ| = {sigma_abs/1e6:.1f} MPa ({state})")
+        print(f"  -> Yield limit = {ys/1e6:.1f} MPa --> {'SAFE ' if sigma_abs <= ys else 'NOT SAFE '}")
+
+        overall_safe &= (sigma_abs <= ys)
+
+    print("-"*60)
+    print(f"STRUCTURE SAFETY: {'SAFE ' if overall_safe else 'NOT SAFE '}")
+    print("-"*60)
+
+    # --- gammel utskrift beholdes ---
     print(f'D: {D}')
     print(strain)
     print(stress)
     return strain, stress
 
 
+def recover_reactions(K_original, P_original, D, bound):
+    
+    R = K_original.dot(D) - P_original
 
+    print("\n=== Reaction-forces ===")
+    for i in range(bound.shape[0]):
+        node, ldof, disp = int(bound[i,0]), int(bound[i,1]), bound[i,2]
+        dof = (node - 1)*2 + (ldof - 1)
+        label = 'Fx' if ldof == 1 else 'Fy'
+        print(f"Node {node} {label}: {R[dof,0]:.3f} N")
+    return R
 
 
 def PlotStructure(X, IX, ne, neqn, bound, loads, D, stress):

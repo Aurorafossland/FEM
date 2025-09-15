@@ -1,13 +1,14 @@
-import numpy             as np
-import scipy             as sp
-import scipy.sparse      as sps
+import numpy as np
+import scipy as sp
+import scipy.sparse as sps
 import matplotlib.pyplot as plt
 import math
 import re
 from scipy.sparse.linalg import spsolve
 
-from src.plotsupports    import plotsupports
-from src.plotloads       import plotloads
+from src.plotsupports import plotsupports   # <-- riktig funksjon import
+from src.plotloads import plotloads
+
 
 class Fea:
     def __init__(self, input_file):       

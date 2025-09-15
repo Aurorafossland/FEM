@@ -84,8 +84,9 @@ IX = [
 ];
 % Element properties: Young's modulus, area, c1, c2, c3, c4
 mprop = [
-1	1  0.1 70 0.3 100
+1	1  1 50 0.1 100
 ];
+
 % Nodal diplacements: node_id, degree of freedom (1 - x, 2 - y), displacement
 bound = [
 1	2	0
