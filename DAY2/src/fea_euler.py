@@ -30,6 +30,7 @@ class Fea:
                        f"Error in input file. Could not read variable {requiredvar}."
             X = self.X; IX = self.IX; mprop = self.mprop
             bound = self.bound; loads = self.loads; plotdof = self.plotdof
+            n_incr = self.n_incr
 
 
         # Calculate problem size
@@ -46,18 +47,32 @@ class Fea:
         stress = np.zeros((ne,1))        # Element stress vector
 
         # Calculate displacements
-        P = buildload(X, IX, ne, P, loads, mprop)    # Build global load vector
-
-        Kmatr = buildstiff(X, IX, ne, mprop, Kmatr)  # Build global stiffness matrix
+        P_final = buildload(X, IX, ne, P, loads, mprop)    # Build global load vector
+        dP = P_final/n_incr
         
-        Kmatr, P = enforce(Kmatr, P, bound)          # Enforce boundary conditions
-
-        D = spsolve(Kmatr, P).reshape(-1,1)   #Global displacementvector
+        P = np.zeros((neqn, int(n_incr + 1)))
+        D = np.zeros((neqn, int(n_incr + 1))) # Displacement vector in global coordinates
         
-        strain, stress = recover(mprop, X, IX, D, ne, strain, stress)  # Calculate element stress and strain
+        for n in range(1, int(n_incr + 1)):
+
+            P[:, n:n+1] = P[:, n-1:n] + dP
+
+            Kmatr = buildstiff(X, IX, ne, mprop, Kmatr, D[:, n:n+1])  # Build global stiffness matrix
+            Kmatr, P[:, n:n+1] = enforce(Kmatr, P[:, n:n+1], bound)          # Enforce boundary conditions
+
+            D[:, n:n+1] = D[:, n-1:n] + spsolve(Kmatr, P[:, n:n+1]).reshape(-1, 1)   #Global displacementvector
+        
+        strain, stress = recover(mprop, X, IX, D[:, int(n_incr-1):int(n_incr)], ne, strain, stress)  # Calculate element stress and strain
 
         # Plot results
-        PlotStructure(X, IX, ne, neqn, bound, loads, D, stress)  # Plot structure
+        print(f'Force Vector: {D[-2]}')
+        plt.plot(P[-2], D[-2], 'b-o')
+        plt.xlabel('Load P [N]')
+        plt.ylabel('Displacement D [m]')
+        plt.title('Load-displacement diagram')
+        plt.grid(True)
+        plt.show(block=True)
+        PlotStructure(X, IX, ne, neqn, bound, loads, D[:, int(n_incr-1):int(n_incr)], stress)  # Plot structure
 
 
 def buildload(X, IX, ne, P, loads, mprop):
@@ -68,7 +83,7 @@ def buildload(X, IX, ne, P, loads, mprop):
         # print(f'ERROR in fea/buildload: build load vector')
     return P
 
-def buildstiff(X, IX, ne, mprop, K):
+def buildstiff(X, IX, ne, mprop, K, D):
     for e in range(ne):
         # Define element parameters
         dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
@@ -77,8 +92,16 @@ def buildstiff(X, IX, ne, mprop, K):
 
         # Assemble element stiffness matrix
         Ae = mprop[int(IX[e,2])-1,1]
-        Ee = mprop[int(IX[e,2])-1,0]
-        ke = (Ae*Ee/L**3) * np.array([[dx**2, dx*dy, -dx**2, -dx*dy],
+
+        c1 =  mprop[int(IX[e,2])-1,2]
+        c2 =  mprop[int(IX[e,2])-1,3]
+        c3 =  mprop[int(IX[e,2])-1,4]
+        c4 =  mprop[int(IX[e,2])-1,5]
+
+        lam = 1 + c4 * (D[2*int(IX[e,1])-2,0] - D[2*int(IX[e,0])-2,0])/L
+
+        Et = c4*(c1*(1+2*lam**(-3))+3*c2*lam**(-4)+3*c3*(1-lam**2-2*lam**(-3)+2*lam**(4)))
+        ke = (Ae*Et/L**3) * np.array([[dx**2, dx*dy, -dx**2, -dx*dy],
                                       [dx*dy, dy**2, -dx*dy, -dy**2],
                                       [-dx**2, -dx*dy, dx**2, dx*dy],
                                       [-dx*dy, -dy**2, dx*dy, dy**2]])
@@ -87,8 +110,8 @@ def buildstiff(X, IX, ne, mprop, K):
         # --- FIX: ind should be [2*n1, 2*n1+1, 2*n2, 2*n2+1] ---
         n1 = int(IX[e,0])-1
         n2 = int(IX[e,1])-1
-        edof = [2*n1, 2*n1+1, 2*n2, 2*n2+1]  # <-- minimal fix
-
+        edof = [2*n1, 2*n1+1, 2*n2, 2*n2+1]
+        
         # Assemble into global stiffness matrix
         for i in range(4):
             for j in range(4):
