@@ -106,8 +106,6 @@ def buildstiff(X, IX, ne, mprop, K):
     print(K.toarray())
     return K
 
-
-
 def enforce(K, P, bound):
     alpha=1e12 #infinity
     ndof_total = K.shape[0] #gets the number of degrees of freedom. shape will give a tuple with (i,j)
@@ -125,6 +123,7 @@ def enforce(K, P, bound):
         #spør om man skal legge til for p-matrisen også eller kun for k-matrisen. 
 
     return K_mod, P_mod 
+
 def recover(mprop, X, IX, D, ne, strain, stress):
 
     for e in range(ne):
@@ -160,14 +159,26 @@ def recover(mprop, X, IX, D, ne, strain, stress):
         strain[e, 0] = eps
         stress[e, 0] = sig
 
-    
- 
-    node_C = 9
-    dof_vC = 2*(node_C-1) + 1   # vertikal dof
-    vC = float(D[dof_vC, 0])    # i meter
-    print(f"\nNode C (node {node_C}) vertical displacement: {vC:.6f} m ({vC*1e3:.2f} mm)")
+    print(f'D: {D}')
+    print(strain)
+    print(stress)
+    return strain, stress
 
-    # --- NY DEL: sikkerhetssjekk ---
+def find_displacement(Kmatr, P, node_num):
+
+    D = spsolve(Kmatr, P).reshape(-1, 1)
+    
+
+    dof_x = 2 * (node_num - 1)
+    dof_y = dof_x + 1
+    
+    ux = float(D[dof_x, 0])  #horisontal
+    uy = float(D[dof_y, 0])  #vertical
+
+    print(f"Node {node_num}: ux = {ux:.6e} m, uy = {uy:.6e} m")
+    return D, ux, uy
+
+def securety_check(stress, IX):
     yield_limit = {1: 335e6, 2: 250e6}  # Pa
     material_name = {1: "Steel (mild)", 2: "Aluminium"}
     sig = stress.reshape(-1)
@@ -202,12 +213,7 @@ def recover(mprop, X, IX, D, ne, strain, stress):
     print(f"STRUCTURE SAFETY: {'SAFE ' if overall_safe else 'NOT SAFE '}")
     print("-"*60)
 
-    # --- gammel utskrift beholdes ---
-    print(f'D: {D}')
-    print(strain)
-    print(stress)
-    return strain, stress
-
+    return 
 
 def recover_reactions(K_original, P_original, D, bound):
     
@@ -220,6 +226,9 @@ def recover_reactions(K_original, P_original, D, bound):
         label = 'Fx' if ldof == 1 else 'Fy'
         print(f"Node {node} {label}: {R[dof,0]:.3f} N")
     return R
+
+
+
 
 
 def PlotStructure(X, IX, ne, neqn, bound, loads, D, stress):
