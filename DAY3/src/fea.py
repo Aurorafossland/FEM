@@ -276,7 +276,7 @@ def PlotStructure(X, IX, ne, neqn, bound, loads, D, stress):
 ###NEW DAY 3: 
 
 
-def calculate_residual(ne, X, IX, strain, stress, mprop, D, P):
+def calculate_residual(ne, X, IX, mprop, D, P):
     Bbars = []  #saves Bbar
     ndof = D.shape[0] 
     R_int = np.zeros((ndof, 1)) #Sets up a global inner force-vector. 
@@ -332,11 +332,59 @@ def calculate_residual(ne, X, IX, strain, stress, mprop, D, P):
     print(f'redisual: {residual}')
     return residual
   
-def Newton_Raphson(ne, D, K, X, IX, P ):
+def Newton_Raphson(ne, D, K, X, IX, P, mprop, loads, n_incr, neqn, bound):
     limit = 1e-10
-    for e in range(ne):
-        dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
-        dy = X[int(IX[e,1])-1,1] - X[int(IX[e,0])-1,1]
-        L = np.sqrt(dx**2 + dy**2)
+    max_iter = 10
+    P_final = buildload(X, IX, ne, P, loads, mprop)    # Build global load vector
+    dP = P_final/n_incr
+    P = np.zeros(neqn, int(n_incr + 1))
+    D = np.zeros(neqn, int(n_incr + 1)) # Displacement vector in global coordinates
+    R = np.zeros(neqn, int(n_incr +1))
 
-    return  
+    for n in range(1, int(n_incr + 1)):
+        P[:, n:n+1] = P[:, n-1:n] + dP
+        Dn = np.zeros(neqn, int(max_iter + 1))
+        for i in range(max_iter+1): 
+            res = calculate_residual(ne, X, IX, mprop, Dn[:, i-1:i], P[:, n:n+1])
+
+            #må legge inn BC
+
+            if np.linalg.norm(res) < limit: 
+                break
+
+            #calculate K with equation from lecture
+            K , _ = enforce(K, P, bound)
+
+            dD = -spsolve(K, res)
+
+            Dn[:, i:i+1] += Dn[:, i-1:i] + dD 
+        D[:, n:n+1] = Dn[:, i:i+1]
+
+    return D, P
+        
+
+
+    
+
+
+
+    #return  
+
+
+    #    # Calculate displacements
+    #     P_final = buildload(X, IX, ne, P, loads, mprop)    # Build global load vector
+    #     dP = P_final/n_incr
+        
+    #     P = np.zeros((neqn, int(n_incr + 1)))
+    #     D = np.zeros((neqn, int(n_incr + 1))) # Displacement vector in global coordinates
+        
+    #     for n in range(1, int(n_incr + 1)):
+
+    #         P[:, n:n+1] = P[:, n-1:n] + dP
+
+    #         Kmatr = buildstiff(X, IX, ne, mprop, Kmatr, D[:, n:n+1])  # Build global stiffness matrix
+    #         Kmatr, P[:, n:n+1] = enforce(Kmatr, P[:, n:n+1], bound)          # Enforce boundary conditions
+
+    #         D[:, n:n+1] = D[:, n-1:n] + spsolve(Kmatr, P[:, n:n+1]).reshape(-1, 1)   #Global displacementvector
+        
+    #     strain, stress = recover(mprop, X, IX, D[:, int(n_incr-1):int(n_incr)], ne, strain, stress)  # Calculate element stress and strain
