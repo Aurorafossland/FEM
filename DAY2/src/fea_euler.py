@@ -32,7 +32,6 @@ class Fea:
             bound = self.bound; loads = self.loads; plotdof = self.plotdof
             n_incr = self.n_incr
 
-
         # Calculate problem size
         neqn = X.shape[0] * X.shape[1]   # Number of equations
         ne = IX.shape[0]                 # Number of elements
@@ -73,7 +72,6 @@ class Fea:
         plt.grid(True)
         plt.show(block=True)
         PlotStructure(X, IX, ne, neqn, bound, loads, D[:, int(n_incr-1):int(n_incr)], stress)  # Plot structure
-
 
 def buildload(X, IX, ne, P, loads, mprop):
     for i in range(loads.shape[0]):
