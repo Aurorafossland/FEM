@@ -10,6 +10,6 @@ print ("Current working dir : %s" % os.getcwd())
 from src.fea_euler import Fea
 
 # Define input file (the standard FEM course Matlab input format)
-input_file = 'TrussExercise2_2025.m'
+input_file = 'Exercise2_1.m'
 # Perform FEA
 fea = Fea(input_file)

@@ -26,7 +26,7 @@ bound = [
 ];
 % Nodal loads: node_id, degree of freedom (1 - x, 2 - y), load
 loads = [
-3	1	10000
+3	1	20
 ];
 % Control parameters
 plotdof = 24;

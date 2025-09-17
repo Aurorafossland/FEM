@@ -12,13 +12,13 @@ def plotForce():
     c4 = 100
     E = 3E+6
     A = 2
-    dl = np.linspace(0, 20, 200)  
+    dl = np.linspace(0, 0.20, 200)  
     eps = dl/l0
     
-    stretch = 1 + c4*eps
-    stress = c1 * (stretch - stretch**(-2)) \
-       + c2 * (1 - stretch**(-3)) \
-       + c3 * (1 - 3*stretch + stretch**3 - 2*stretch**(-3) + 3*stretch**(-2))
+    lam = 1 + c4*eps
+    stress = c1 * (lam - lam**(-2)) \
+       + c2 * (1 - lam**(-3)) \
+       + c3 * (1 - 3*lam + lam**3 - 2*lam**(-3) + 3*lam**(-2))
 
     force = stress * A
     

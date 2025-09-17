@@ -57,7 +57,7 @@ class Fea:
 
             P[:, n:n+1] = P[:, n-1:n] + dP
 
-            Kmatr = buildstiff(X, IX, ne, mprop, Kmatr, D[:, n:n+1])  # Build global stiffness matrix
+            Kmatr = buildstiff(X, IX, ne, mprop, neqn, D[:, n-1:n])  # Build global stiffness matrix
             Kmatr, P[:, n:n+1] = enforce(Kmatr, P[:, n:n+1], bound)          # Enforce boundary conditions
 
             D[:, n:n+1] = D[:, n-1:n] + spsolve(Kmatr, P[:, n:n+1]).reshape(-1, 1)   #Global displacementvector
@@ -66,9 +66,9 @@ class Fea:
 
         # Plot results
         print(f'Force Vector: {D[-2]}')
-        plt.plot(P[-2], D[-2], 'b-o')
-        plt.xlabel('Load P [N]')
-        plt.ylabel('Displacement D [m]')
+        plt.plot(D[-2], P[-2], 'b-o')
+        plt.ylabel('Load P [N]')
+        plt.xlabel('Displacement D [m]')
         plt.title('Load-displacement diagram')
         plt.grid(True)
         plt.show(block=True)
@@ -83,12 +83,18 @@ def buildload(X, IX, ne, P, loads, mprop):
         # print(f'ERROR in fea/buildload: build load vector')
     return P
 
-def buildstiff(X, IX, ne, mprop, K, D):
+def buildstiff(X, IX, ne, mprop, neqn, D):
+    K = sps.csc_matrix((neqn, neqn))
     for e in range(ne):
         # Define element parameters
         dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
         dy = X[int(IX[e,1])-1,1] - X[int(IX[e,0])-1,1]
         L = np.sqrt(dx**2 + dy**2)
+
+        # Local to global mapping
+        n1 = int(IX[e,0])-1
+        n2 = int(IX[e,1])-1
+        edof = [2*n1, 2*n1+1, 2*n2, 2*n2+1]
 
         # Assemble element stiffness matrix
         Ae = mprop[int(IX[e,2])-1,1]
@@ -98,19 +104,19 @@ def buildstiff(X, IX, ne, mprop, K, D):
         c3 =  mprop[int(IX[e,2])-1,4]
         c4 =  mprop[int(IX[e,2])-1,5]
 
-        lam = 1 + c4 * (D[2*int(IX[e,1])-2,0] - D[2*int(IX[e,0])-2,0])/L
+        du = D[edof[2],0] - D[edof[0],0]
+        dv = D[edof[3],0] - D[edof[1],0]
 
-        Et = c4*(c1*(1+2*lam**(-3))+3*c2*lam**(-4)+3*c3*(1-lam**2-2*lam**(-3)+2*lam**(4)))
+        eps = (dx*du + dy*dv)/L
+        print(f'eps: {eps}')
+        
+        lam = 1 + c4 * eps
+
+        Et = c4*(c1*(1+2*lam**(-3))+3*c2*lam**(-4)+3*c3*(-1+lam**2-2*lam**(-3)+2*lam**(-4)))
         ke = (Ae*Et/L**3) * np.array([[dx**2, dx*dy, -dx**2, -dx*dy],
                                       [dx*dy, dy**2, -dx*dy, -dy**2],
                                       [-dx**2, -dx*dy, dx**2, dx*dy],
                                       [-dx*dy, -dy**2, dx*dy, dy**2]])
-        
-        # Adding into global stiffeness matrix
-        # --- FIX: ind should be [2*n1, 2*n1+1, 2*n2, 2*n2+1] ---
-        n1 = int(IX[e,0])-1
-        n2 = int(IX[e,1])-1
-        edof = [2*n1, 2*n1+1, 2*n2, 2*n2+1]
         
         # Assemble into global stiffness matrix
         for i in range(4):
@@ -121,8 +127,6 @@ def buildstiff(X, IX, ne, mprop, K, D):
     print("Stiffness matrix K (dense):")
     print(K.toarray())
     return K
-
-
 
 def enforce(K, P, bound):
     alpha=1e12 #infinity
@@ -179,8 +183,8 @@ def recover(mprop, X, IX, D, ne, strain, stress):
         strain[e, 0] += eps
         stress[e, 0] += sig
     print(f'D: {D}')
-    print(strain)
-    print(stress)
+    print(f' Strain: {strain}')
+    print(f' Stress: {stress}')
     return strain, stress
 
 
