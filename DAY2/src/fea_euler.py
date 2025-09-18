@@ -58,7 +58,6 @@ class Fea:
         plt.show(block=True)
         PlotStructure(X, IX, ne, neqn, bound, loads, disp[:, int(n_incr-1):int(n_incr)], stress)
 
-
 def buildload(X, IX, ne, P, loads, mprop):
     '''Update load vector with loads from input file
     
