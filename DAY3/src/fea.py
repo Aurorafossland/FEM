@@ -51,7 +51,7 @@ class Fea:
         # Calculate displacements
         P = buildload(X, IX, ne, P, loads, mprop)    # Build global load vector
 
-        Kmatr = buildstiff(X, IX, ne, mprop, Kmatr)  # Build global stiffness matrix
+        Kmatr = buildstiff(X, IX, ne, mprop, Kmatr, D, P)  # Build global stiffness matrix
         
         # --- ta vare på K og P før enforce ---
         # --- ta vare på K og P før enforce ---
@@ -73,10 +73,75 @@ def buildload(X, IX, ne, P, loads, mprop):
         node, ldof, force = int(loads[i,0]), int(loads[i,1]), loads[i,2]
         dof = (node - 1) * 2 + (ldof - 1)
         P[dof] += force
-        print(f'ERROR in fea/buildload: build load vector')
+
     return P
 
-def buildstiff(X, IX, ne, mprop, K):
+
+
+def calculate_residual(ne, X, IX, mprop, D, P):
+    Bbars = []  #saves Bbar
+    ndof = D.shape[0] 
+    R_int = np.zeros((ndof, 1)) #Sets up a global inner force-vector. 
+
+    #So far we have the first part in the resuidal-term before further summation
+    for e in range(ne):
+        dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
+        dy = X[int(IX[e,1])-1,1] - X[int(IX[e,0])-1,1]
+        L = np.sqrt(dx**2 + dy**2)
+        #same as prev code 
+
+        midx = int(IX[e, 2]) - 1 #this gets out the materialnumber for element e, and we need to subtract 1 to index correctly in python
+        E    = mprop[midx, 0]
+        A = mprop[midx, 1]
+         #reads materialdata from mprop 
+
+        length_vector = np.array([-dx, -dy, dx, dy])
+        B0 = (1/L**2) * length_vector   
+        #same av prev code
+
+        n1 = int(IX[e, 0]) - 1
+        n2 = int(IX[e, 1]) - 1
+
+        d = np.array([
+            D[2*n1, 0],
+            D[2*n1 + 1, 0],
+            D[2*n2, 0],
+            D[2*n2 + 1, 0]
+        ])
+        #this is the same as prev code
+
+        M = np.array([
+            [ 1,  0, -1,  0],
+            [ 0,  1,  0, -1],
+            [-1,  0,  1,  0],
+            [ 0, -1,  0,  1]
+        ]) #from lecture, given 
+
+        quad_term = (d.T @ (M @ d)) / (2 * L**2) #term to calculate the eps_g
+
+        Bbar_T = B0.T + (d.T @ M) / (L**2) #calculate Bbar at the given element
+        eps_G = float(B0.T @ d + quad_term)    #calculate the eps_G by the term given in lecture day 3
+        N = A * E * eps_G        #axial force with hookes law              
+
+        f_int_e = (Bbar_T * N * L).reshape(-1,1) #this is the first part of the redisual-term for the goven elemnt
+
+        edof = [2*n1, 2*n1+1, 2*n2, 2*n2+1] #dof
+        for i in range(4): #this will be the summation-part of the redisual-term. the local matrix is the size of four
+            R_int[edof[i], 0] += f_int_e[i, 0]
+
+    residual = R_int - P #this is the final redisual-vector. this will have the size dofx1
+
+    print(f'redisual: {residual}')
+    return residual
+
+def buildstiff(X, IX, ne, mprop, K, D, P):   ##La til de to siste inputparametrene for å kunne kalle på eps_g. om det ikke stemmer må vi bare definere det manuelt. 
+    M = np.array([
+            [ 1,  0, -1,  0],
+            [ 0,  1,  0, -1],
+            [-1,  0,  1,  0],
+            [ 0, -1,  0,  1]
+        ]) #from lecture, given 
+
     for e in range(ne):
         # Define element parameters
         dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
@@ -96,11 +161,51 @@ def buildstiff(X, IX, ne, mprop, K):
         n1 = int(IX[e,0])-1
         n2 = int(IX[e,1])-1
         edof = [2*n1, 2*n1+1, 2*n2, 2*n2+1]  # <-- minimal fix
+        
 
-        # Assemble into global stiffness matrix
+                # Assemble into global stiffness matrix
         for i in range(4):
             for j in range(4):
                 K[edof[i], edof[j]] += ke[i, j]
+
+        ###Aurora sin del, regne ut K day 3: ###
+        ##Notat til meg selv, sjekk ut B0T og BdT osv og sjekk at T-termene er riktige :)
+        
+        d = np.array([
+            D[2*n1, 0],
+            D[2*n1 + 1, 0],
+            D[2*n2, 0],
+            D[2*n2 + 1, 0]
+        ])
+
+
+        length_vector = np.array([-dx, -dy, dx, dy])
+        B0 = ((1/L**2) * length_vector).reshape(-1, 1)
+
+        quad_term = (d.T @ (M @ d)) / (2 * L**2)
+        Bbar_T = B0.T + (d.T @ M) / (L**2)
+        Bd = ((d @ M) / L**2).reshape(-1, 1)           
+
+        eps_g = float(B0.T @ d + quad_term)
+        N_g = Ae * Ee * eps_g
+
+        #Alle disse gir 4x4 matriser
+        k_theta = (1/L**2) * N_g * L * M          #stress stiffness (M er 4x4)
+        k_0 = Ae * Ee * L * (B0 @ B0.T)           #initial linear stiffness (outer product)
+        k_d = Ae * Ee * L * (B0 @ Bd.T + Bd @ B0.T + Bd @ Bd.T)  #displacement stiffness
+
+        K_g = k_theta + k_d   #k_0 == ke, og ke er allerede lagt til
+
+
+        #Assemble into global stiffness matrix
+        for i in range(4):
+            for j in range(4):
+                K[edof[i], edof[j]] += K_g[i, j]
+
+
+        ###Aurora del slutt:) Har nå endret slik at tidligere K blir overkjørt. 
+
+
 
     np.set_printoptions(precision=3, suppress=True)
     print("Stiffness matrix K (dense):")
@@ -152,9 +257,9 @@ def recover(mprop, X, IX, D, ne, strain, stress):
             D[2*n2 + 1, 0]
         ])
 
-        B0_T = (1/L**2) * length_vector
+        B0 = (1/L**2) * length_vector
 
-        eps = float(B0_T @ de)
+        eps = float(B0.T @ de)
         sig = E * eps
 
         strain[e, 0] = eps
@@ -275,63 +380,6 @@ def PlotStructure(X, IX, ne, neqn, bound, loads, D, stress):
 
 ###NEW DAY 3: 
 
-
-def calculate_residual(ne, X, IX, mprop, D, P):
-    Bbars = []  #saves Bbar
-    ndof = D.shape[0] 
-    R_int = np.zeros((ndof, 1)) #Sets up a global inner force-vector. 
-
-    #So far we have the first part in the resuidal-term before further summation
-    for e in range(ne):
-        dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
-        dy = X[int(IX[e,1])-1,1] - X[int(IX[e,0])-1,1]
-        L = np.sqrt(dx**2 + dy**2)
-        #same as prev code 
-
-        midx = int(IX[e, 2]) - 1 #this gets out the materialnumber for element e, and we need to subtract 1 to index correctly in python
-        E    = mprop[midx, 0]
-        A = mprop[midx, 1]
-         #reads materialdata from mprop 
-
-        length_vector = np.array([-dx, -dy, dx, dy])
-        B0_T = (1/L**2) * length_vector   
-        #same av prev code
-
-        n1 = int(IX[e, 0]) - 1
-        n2 = int(IX[e, 1]) - 1
-
-        d = np.array([
-            D[2*n1, 0],
-            D[2*n1 + 1, 0],
-            D[2*n2, 0],
-            D[2*n2 + 1, 0]
-        ])
-        #this is the same as prev code
-
-        M = np.array([
-            [ 1,  0, -1,  0],
-            [ 0,  1,  0, -1],
-            [-1,  0,  1,  0],
-            [ 0, -1,  0,  1]
-        ]) #from lecture, given 
-
-        quad_term = (d.T @ (M @ d)) / (2 * L**2) #term to calculate the eps_g
-
-        Bbar_T = B0_T + (d.T @ M) / (L**2) #calculate Bbar at the given element
-        eps_G = float(B0_T @ d + quad_term)    #calculate the eps_G by the term given in lecture day 3
-        N = A * E * eps_G        #axial force with hookes law              
-
-        f_int_e = (Bbar_T * N * L).reshape(-1,1) #this is the first part of the redisual-term for the goven elemnt
-
-        edof = [2*n1, 2*n1+1, 2*n2, 2*n2+1] #dof
-        for i in range(4): #this will be the summation-part of the redisual-term. the local matrix is the size of four
-            R_int[edof[i], 0] += f_int_e[i, 0]
-
-    residual = R_int - P #this is the final redisual-vector. this will have the size dofx1
-
-    print(f'redisual: {residual}')
-    return residual
-  
 def Newton_Raphson(ne, D, K, X, IX, P, mprop, loads, n_incr, neqn, bound):
     limit = 1e-10
     max_iter = 10
@@ -346,17 +394,13 @@ def Newton_Raphson(ne, D, K, X, IX, P, mprop, loads, n_incr, neqn, bound):
         Dn = np.zeros(neqn, int(max_iter + 1))
         for i in range(max_iter+1): 
             res = calculate_residual(ne, X, IX, mprop, Dn[:, i-1:i], P[:, n:n+1])
-
             #må legge inn BC
-
             if np.linalg.norm(res) < limit: 
                 break
 
             #calculate K with equation from lecture
             K , _ = enforce(K, P, bound)
-
             dD = -spsolve(K, res)
-
             Dn[:, i:i+1] += Dn[:, i-1:i] + dD 
         D[:, n:n+1] = Dn[:, i:i+1]
 
