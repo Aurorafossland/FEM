@@ -31,4 +31,4 @@ loads = [
 % Control parameters
 plotdof = 24;
 
-n_incr = 20;
+n_incr = 10;

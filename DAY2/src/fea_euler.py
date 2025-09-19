@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import math
 import re
 from scipy.sparse.linalg import spsolve
-
+from sksparse.cholmod    import cholesky # requires scikit-sparse package
 from src.plotsupports    import plotsupports
 from src.plotloads       import plotloads
 
@@ -49,6 +49,7 @@ class Fea:
         disp_e, force_e, strain_e, stress_e, res_e = euler(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R)
         disp_ec, force_ec, strain_ec, stress_ec, res_ec = euler_corrected(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R)
         disp_nr, force_nr, strain_nr, stress_nr, res_nr = newton_raphson(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R)
+        disp_nr_mod, force_nr_mod, strain_nr_mod, stress_nr_mod, res_nr_mod = newton_raphson_modified_chol(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R)
 
         dL = np.linspace(0, 0.20, 100)
         force_curve = plotForce(IX, dL, mprop)
@@ -58,6 +59,7 @@ class Fea:
         plt.plot(disp_e[-2], force_e[-2], 'r--x', label='Euler', markersize=8)
         plt.plot(disp_ec[-2], force_ec[-2], 'b-o', label='Euler corrected', markersize=8)
         plt.plot(disp_nr[-2], force_nr[-2], 'g--o', label='Newton-Raphson', markersize=8)
+        plt.plot(disp_nr_mod[-2], force_nr_mod[-2], 'm-.o', label='Newton-Raphson modified', markersize=8)
         plt.plot(dL, force_curve, 'k-', label='Exact', linewidth=2)
         plt.ylabel('Load P [N]')
         plt.xlabel('Displacement D [m]')
@@ -86,7 +88,7 @@ def buildstiff(X, IX, ne, mprop, neqn, D):
 
     returns global stiffness matrix
     '''
-    K = sps.csc_matrix((neqn, neqn))
+    K = sps.lil_matrix((neqn, neqn))
     for e in range(ne):
         # Define element parameters
         dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
@@ -150,7 +152,7 @@ def enforce(K, P, bound):
         else:
             K_mod[dof, dof] += alpha
 
-    return K_mod, P_mod 
+    return K_mod.tocsc(), P_mod 
 
 
 def recover(mprop, X, IX, D, ne):
@@ -362,6 +364,63 @@ def newton_raphson(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stres
     strain, stress, R = recover(mprop, X, IX, disp, ne)
 
     return D, P, strain, stress, R
+
+
+def newton_raphson_modified_chol(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R):
+    '''Modified Newton-Raphson method with sparse Cholesky factorization.
+    Factorizes K once per load step and reuses it in all equilibrium iterations.
+
+    Returns displacement, force, strain, stress and residual vectors.
+    '''    
+    # Initialize arrays
+    dP = P_final / n_incr
+    
+    P = np.zeros((neqn, int(n_incr + 1)))
+    D = np.zeros((neqn, int(n_incr + 1)))
+
+    # Parameters for equilibrium iteration
+    limit = 1e-3
+    max_iter = 70
+    alpha = 1.0
+    
+    # Loop over load increments
+    for n in range(1, int(n_incr + 1)):
+        # Apply incremental load
+        P[:, n:n+1] = P[:, n-1:n] + dP
+        Dn = np.zeros((neqn, int(max_iter + 1)))
+
+        # --- Factorize stiffness matrix ONCE per load step ---
+        K = buildstiff(X, IX, ne, mprop, neqn, Dn[:, 0:1])
+        K, _ = enforce(K, P[:, n:n+1], bound)
+
+        # Cholesky factorization (reusable solver)
+        factor = cholesky(K)
+
+        # Equilibrium iterations
+        for i in range(1, int(max_iter + 1)):
+            # Compute residual
+            _, __, R_int = recover(mprop, X, IX, Dn[:, i-1:i], ne)
+            R_i = R_int - P[:, n:n+1]
+
+            # Check convergence
+            if np.linalg.norm(R_i) < limit:
+                break
+
+            # Solve using Cholesky factorization
+            dD = factor(R_i).reshape(-1, 1)
+
+            # Update displacement
+            Dn[:, i:i+1] = Dn[:, i-1:i] - dD * alpha
+
+        # Store converged displacement for load step n
+        D[:, n:n+1] = Dn[:, i:i+1]
+    
+    # Final recovery of strains and stresses
+    disp = D[:, int(n_incr):int(n_incr+1)]
+    strain, stress, R = recover(mprop, X, IX, disp, ne)
+
+    return D, P, strain, stress, R
+
 
 def plotForce(IX, dl, mprop): 
     l0 = 3
