@@ -30,6 +30,7 @@ class Fea:
                        f"Error in input file. Could not read variable {requiredvar}."
             X = self.X; IX = self.IX; mprop = self.mprop
             bound = self.bound; loads = self.loads; plotdof = self.plotdof
+            n_incr = self.n_incr
 
 
         # Calculate problem size
@@ -38,44 +39,41 @@ class Fea:
         print(f'Number of DOF {neqn} Number of elements {ne}')
 
         # Initialize arrays
-        Kmatr = sps.csc_matrix((neqn, neqn)) # Stiffness matrix
         P = np.zeros((neqn,1))           # Force vector
-        D = np.zeros((neqn,1))           # Displacement vector
         R = np.zeros((neqn,1))           # Residual vector
-
-
-        
         strain = np.zeros((ne,1))        # Element strain vector
         stress = np.zeros((ne,1))        # Element stress vector
 
         # Calculate displacements
-        P = buildload(X, IX, ne, P, loads, mprop)    # Build global load vector
-
-        Kmatr = buildstiff(X, IX, ne, mprop, Kmatr, D, P)  # Build global stiffness matrix
+        P_final = buildload(X, IX, ne, P, loads, mprop)    # Build global load vector
         
-        # --- ta vare på K og P før enforce ---
-        # --- ta vare på K og P før enforce ---
-        K_original = Kmatr.copy()
-        P_original = P.copy()
+        disp_nr, force_nr, strain_nr, stress_nr, res_nr = newton_raphson(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R)
 
-        Kmatr, P = enforce(Kmatr, P, bound)
-        D = spsolve(Kmatr, P).reshape(-1,1)
+        D = np.linspace(0, 0.9, 100)
+        force_curve = plotForce(IX, D, mprop)
 
-        # === Beregn og print reaksjonskrefter ===
-        R = recover_reactions(K_original, P_original, D, bound)
-
-        strain, stress = recover(mprop, X, IX, D, ne, strain, stress)
-        PlotStructure(X, IX, ne, neqn, bound, loads, D, stress)
-        calculate_residual(ne, X, IX, strain, stress, mprop, D, P)
+        # Plot results
+        print(f'Residual Vector: {res_nr}')
+        plt.plot(disp_nr[-3], force_nr[-3], 'g--o', label='Newton-Raphson', markersize=8)
+        plt.plot(D, force_curve, 'k-', label='Exact', linewidth=2)
+        plt.ylabel('Load P [N]')
+        plt.xlabel('Displacement D [m]')
+        plt.title('Load-displacement diagram')
+        plt.legend()
+        plt.grid(True)
+        plt.show(block=True)
+        PlotStructure(X, IX, ne, neqn, bound, loads, disp_nr[:, int(n_incr-1):int(n_incr)], stress)
 
 def buildload(X, IX, ne, P, loads, mprop):
+    '''Update load vector with loads from input file
+    
+    returns updated load vector
+    '''
     for i in range(loads.shape[0]):
         node, ldof, force = int(loads[i,0]), int(loads[i,1]), loads[i,2]
         dof = (node - 1) * 2 + (ldof - 1)
         P[dof] += force
-
     return P
-
 
 
 def calculate_residual(ne, X, IX, mprop, D, P):
@@ -134,7 +132,15 @@ def calculate_residual(ne, X, IX, mprop, D, P):
     print(f'redisual: {residual}')
     return residual
 
-def buildstiff(X, IX, ne, mprop, K, D, P):   ##La til de to siste inputparametrene for å kunne kalle på eps_g. om det ikke stemmer må vi bare definere det manuelt. 
+
+def buildstiff(X, IX, ne, mprop, neqn, D):   ##La til de to siste inputparametrene for å kunne kalle på eps_g. om det ikke stemmer må vi bare definere det manuelt. 
+    '''Assemble global stiffness matrix
+    Assembles the global stiffness matrix from the element stiffness matrices.
+    Adds up the stress stiffness, initial linear stiffness and displacement stiffness.
+
+    returns global stiffness matrix
+    '''
+    
     M = np.array([
             [ 1,  0, -1,  0],
             [ 0,  1,  0, -1],
@@ -142,60 +148,38 @@ def buildstiff(X, IX, ne, mprop, K, D, P):   ##La til de to siste inputparametre
             [ 0, -1,  0,  1]
         ]) #from lecture, given 
 
+    K = sps.lil_matrix((neqn, neqn))
+
     for e in range(ne):
         # Define element parameters
         dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
         dy = X[int(IX[e,1])-1,1] - X[int(IX[e,0])-1,1]
         L = np.sqrt(dx**2 + dy**2)
-
-        # Assemble element stiffness matrix
         Ae = mprop[int(IX[e,2])-1,1]
         Ee = mprop[int(IX[e,2])-1,0]
-        ke = (Ae*Ee/L**3) * np.array([[dx**2, dx*dy, -dx**2, -dx*dy],
-                                      [dx*dy, dy**2, -dx*dy, -dy**2],
-                                      [-dx**2, -dx*dy, dx**2, dx*dy],
-                                      [-dx*dy, -dy**2, dx*dy, dy**2]])
         
-        # Adding into global stiffeness matrix
-        # --- FIX: ind should be [2*n1, 2*n1+1, 2*n2, 2*n2+1] ---
+        # Local to global mapping (zero-indexing in python)
         n1 = int(IX[e,0])-1
         n2 = int(IX[e,1])-1
-        edof = [2*n1, 2*n1+1, 2*n2, 2*n2+1]  # <-- minimal fix
-        
+        edof = [2*n1, 2*n1+1, 2*n2, 2*n2+1]
 
-                # Assemble into global stiffness matrix
-        for i in range(4):
-            for j in range(4):
-                K[edof[i], edof[j]] += ke[i, j]
+        # Local displacement vector and linear strain displacement matrix
+        d = np.array([[D[2*n1, 0]], [D[2*n1 + 1, 0]], [D[2*n2, 0]], [D[2*n2 + 1, 0]]])
+        B_0 = (1/L**2) * np.array([[-dx], [-dy], [dx], [dy]])
 
-        ###Aurora sin del, regne ut K day 3: ###
+        ###Aurora sin del, regne ut K day 3: --> Oppdaterte og ryddet litt
         ##Notat til meg selv, sjekk ut B0T og BdT osv og sjekk at T-termene er riktige :)
-        
-        d = np.array([
-            D[2*n1, 0],
-            D[2*n1 + 1, 0],
-            D[2*n2, 0],
-            D[2*n2 + 1, 0]
-        ])
+        B_d = ((M @ d) / L**2).reshape(-1, 1)
 
-
-        length_vector = np.array([-dx, -dy, dx, dy])
-        B0 = ((1/L**2) * length_vector).reshape(-1, 1)
-
-        quad_term = (d.T @ (M @ d)) / (2 * L**2)
-        Bbar_T = B0.T + (d.T @ M) / (L**2)
-        Bd = ((d @ M) / L**2).reshape(-1, 1)           
-
-        eps_g = float(B0.T @ d + quad_term)
+        eps_g = float(B_0.T @ d + 1/2 * B_d.T @ d)
         N_g = Ae * Ee * eps_g
 
         #Alle disse gir 4x4 matriser
         k_theta = (1/L**2) * N_g * L * M          #stress stiffness (M er 4x4)
-        k_0 = Ae * Ee * L * (B0 @ B0.T)           #initial linear stiffness (outer product)
-        k_d = Ae * Ee * L * (B0 @ Bd.T + Bd @ B0.T + Bd @ Bd.T)  #displacement stiffness
+        k_0 = Ae * Ee * L * (B_0 @ B_0.T)           #initial linear stiffness (outer product)
+        k_d = Ae * Ee * L * (B_0 @ B_d.T + B_d @ B_0.T + B_d @ B_d.T)  #displacement stiffness
 
-        K_g = k_theta + k_d   #k_0 == ke, og ke er allerede lagt til
-
+        K_g = k_theta + k_d + k_0
 
         #Assemble into global stiffness matrix
         for i in range(4):
@@ -203,72 +187,106 @@ def buildstiff(X, IX, ne, mprop, K, D, P):   ##La til de to siste inputparametre
                 K[edof[i], edof[j]] += K_g[i, j]
 
 
-        ###Aurora del slutt:) Har nå endret slik at tidligere K blir overkjørt. 
-
-
-
-    np.set_printoptions(precision=3, suppress=True)
-    print("Stiffness matrix K (dense):")
-    print(K.toarray())
+        ###Aurora del slutt:) Har nå endret slik at tidligere K blir overkjørt.
     return K
 
+
 def enforce(K, P, bound):
-    alpha=1e12 #infinity
-    ndof_total = K.shape[0] #gets the number of degrees of freedom. shape will give a tuple with (i,j)
+    '''Enforce boundary conditions
+    Enforces boundary conditions by modifying the global stiffness matrix.
+    Uses the big number method.
 
-    K_mod = K.copy() #makes a copy of K
-    P_mod = P.copy() #Makes a copy of P
+    returns modified stiffness matrix and load vector
+    '''
+    # Very high stiffness for addition to diagonals
+    alpha = 1e9 * np.max(K.diagonal())
 
-   
-    for i in range(bound.shape[0]): #Iterates through the BC-matrix
-        node, ldof, disp = int(bound[i,0]), int(bound[i,1]), bound[i,2] #gets out the relevant values from the bound-matrix
-        dof = (node - 1) * 2 + (ldof - 1) #will find the degrees of freedom on the global matrix
+    K_mod = K.copy()
+    P_mod = P.copy()
 
-        
-        K_mod[dof, dof] += alpha #will add infinity to the element
-        #spør om man skal legge til for p-matrisen også eller kun for k-matrisen. 
+    for i in range(bound.shape[0]):
+        node, ldof, disp = int(bound[i,0]), int(bound[i,1]), bound[i,2]
 
-    return K_mod, P_mod 
+        # Calculate global dof
+        dof = (node - 1) * 2 + (ldof - 1)
 
-def recover(mprop, X, IX, D, ne, strain, stress):
+        # Check wether boundry stiffness is given
+        if disp:
+            K_mod[dof, dof] += disp
+        else:
+            K_mod[dof, dof] += alpha
+
+    return K_mod.tocsc(), P_mod 
+
+
+def recover(mprop, X, IX, D, ne):
+    '''Recover residuals, strains and stresses
+    Calculate strains and stresses in each element.
+    
+    returns residual, strain and stress vectors'''
+
+    strain = np.zeros((ne, 1))
+    stress = np.zeros((ne, 1))
+
+    neqn = D.shape[0]
+    R_int = np.zeros((neqn, 1))
+
+    M = np.array([
+        [ 1,  0, -1,  0],
+        [ 0,  1,  0, -1],
+        [-1,  0,  1,  0],
+        [ 0, -1,  0,  1]
+    ])
 
     for e in range(ne):
         dx = X[int(IX[e,1])-1,0] - X[int(IX[e,0])-1,0]
         dy = X[int(IX[e,1])-1,1] - X[int(IX[e,0])-1,1]
         L = np.sqrt(dx**2 + dy**2)
 
+        # Check for zero length elements
         if L == 0:
             strain[e,0] = 0.0
             stress[e,0] = 0.0
             continue
-
-        midx = int(IX[e, 2]) - 1     # material index
-        E    = mprop[midx, 0]
-
-        length_vector = np.array([-dx, -dy, dx, dy])
-
+        
+        # Element node numbers and material index
         n1 = int(IX[e, 0]) - 1
         n2 = int(IX[e, 1]) - 1
+        midx = int(IX[e, 2]) - 1
+        
+        A = mprop[midx, 1]  
+        E = mprop[midx, 0]   
 
-        de = np.array([
-            D[2*n1, 0],
-            D[2*n1 + 1, 0],
-            D[2*n2, 0],
-            D[2*n2 + 1, 0]
-        ])
+        # Local displacement vector
+        d = np.array([[D[2*n1, 0]], [D[2*n1 + 1, 0]], [D[2*n2, 0]], [D[2*n2 + 1, 0]]])
 
-        B0 = (1/L**2) * length_vector
+        # Linear strain displacement matrix
+        B_0 = (1/L**2) * np.array([[-dx], [-dy], [dx], [dy]])
 
-        eps = float(B0.T @ de)
-        sig = E * eps
+        # Non-linear part of strain displacement matrix
+        B_d = ((M @ d) / L**2).reshape(-1, 1)
 
-        strain[e, 0] = eps
-        stress[e, 0] = sig
+        # Total strain displacement matrix
+        Bbar_T = B_0.T + (d.T @ M) / (L**2)
 
-    print(f'D: {D}')
-    print(strain)
-    print(stress)
-    return strain, stress
+        # Calculate strain and stress
+        eps_G = float(B_0.T @ d + 1/2 * B_d.T @ d)
+        sig_G = E * eps_G
+        Ne = A * sig_G
+
+        strain[e, 0] = eps_G
+        stress[e, 0] = sig_G
+
+        # Internal force vector
+        f_int_e = (Bbar_T * Ne * L).reshape(-1,1)
+
+        # Add up to global residual vector
+        edof = [2*n1, 2*n1+1, 2*n2, 2*n2+1]
+        for i in range(4):
+            R_int[edof[i], 0] += f_int_e[i, 0]
+        
+    return strain, stress, R_int
+
 
 def find_displacement(Kmatr, P, node_num):
 
@@ -283,6 +301,7 @@ def find_displacement(Kmatr, P, node_num):
 
     print(f"Node {node_num}: ux = {ux:.6e} m, uy = {uy:.6e} m")
     return D, ux, uy
+
 
 def securety_check(stress, IX):
     yield_limit = {1: 335e6, 2: 250e6}  # Pa
@@ -321,6 +340,7 @@ def securety_check(stress, IX):
 
     return 
 
+
 def recover_reactions(K_original, P_original, D, bound):
     
     R = K_original.dot(D) - P_original
@@ -332,9 +352,6 @@ def recover_reactions(K_original, P_original, D, bound):
         label = 'Fx' if ldof == 1 else 'Fy'
         print(f"Node {node} {label}: {R[dof,0]:.3f} N")
     return R
-
-
-
 
 
 def PlotStructure(X, IX, ne, neqn, bound, loads, D, stress):
@@ -375,11 +392,6 @@ def PlotStructure(X, IX, ne, neqn, bound, loads, D, stress):
         plt.show(block=True)
 
 
-
-
-
-###NEW DAY 3: 
-
 def Newton_Raphson(ne, D, K, X, IX, P, mprop, loads, n_incr, neqn, bound):
     limit = 1e-10
     max_iter = 10
@@ -405,30 +417,68 @@ def Newton_Raphson(ne, D, K, X, IX, P, mprop, loads, n_incr, neqn, bound):
         D[:, n:n+1] = Dn[:, i:i+1]
 
     return D, P
-        
 
+def newton_raphson(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R):
+    '''Newton-Raphson method
+    Solves the nonlinear problem using the Newton-Raphson method.
 
+    Returns displacement, force, strain, stress and residual vectors.
+    '''    
+    # Initialize arrays
+    dP = P_final/n_incr
     
+    P = np.zeros((neqn, int(n_incr + 1)))
+    D = np.zeros((neqn, int(n_incr + 1)))
 
+    # Parameterrs for equilibrium iteration
+    limit = 1e-3
+    max_iter = 70
+    alpha = 1
+    
+    # Calculate displacements
+    for n in range(1, int(n_incr + 1)):
 
+        # Initialize load step
+        P[:, n:n+1] = P[:, n-1:n] + dP
+        Dn = np.zeros((neqn, int(max_iter + 1)))
 
-    #return  
+        for i in range(1, int(max_iter + 1)): 
 
+            # Calculate residual and check convergence
+            _, __, R_int = recover(mprop, X, IX, Dn[:, i-1:i], ne)
+            R_i = R_int - P[:, n:n+1]
 
-    #    # Calculate displacements
-    #     P_final = buildload(X, IX, ne, P, loads, mprop)    # Build global load vector
-    #     dP = P_final/n_incr
+            if np.linalg.norm(R_i) < limit: 
+                break
+
+            # Calculate tangent stiffness matrix and solve system
+            K = buildstiff(X, IX, ne, mprop, neqn, Dn[:, i-1:i])
+
+            K , _ = enforce(K, P, bound)
+            dD = spsolve(K, R_i).reshape(-1, 1)
+
+            Dn[:, i:i+1] = Dn[:, i-1:i] - dD * alpha
         
-    #     P = np.zeros((neqn, int(n_incr + 1)))
-    #     D = np.zeros((neqn, int(n_incr + 1))) # Displacement vector in global coordinates
-        
-    #     for n in range(1, int(n_incr + 1)):
+        # Update displacements
+        D[:, n:n+1] = Dn[:, i:i+1]
+    
+    # Final recovery of strains and stresses
+    disp = D[:, int(n_incr):int(n_incr+1)]
+    strain, stress, R = recover(mprop, X, IX, disp, ne)
 
-    #         P[:, n:n+1] = P[:, n-1:n] + dP
+    return D, P, strain, stress, R
 
-    #         Kmatr = buildstiff(X, IX, ne, mprop, Kmatr, D[:, n:n+1])  # Build global stiffness matrix
-    #         Kmatr, P[:, n:n+1] = enforce(Kmatr, P[:, n:n+1], bound)          # Enforce boundary conditions
 
-    #         D[:, n:n+1] = D[:, n-1:n] + spsolve(Kmatr, P[:, n:n+1]).reshape(-1, 1)   #Global displacementvector
-        
-    #     strain, stress = recover(mprop, X, IX, D[:, int(n_incr-1):int(n_incr)], ne, strain, stress)  # Calculate element stress and strain
+def plotForce(IX, d, mprop):
+    '''Plot force-displacement curve for Von Mises truss problem
+    
+    returns force vector'''
+
+    a = 0.4
+    l0 = np.sqrt(1.5**2 + a**2)
+    E = mprop[0, 0]
+    A = mprop[0, 1]
+    
+    P = 2 * E * A * (a/l0)**3 * ((d/a) - 3/2 * (d/a)**2 + 1/2 * (d/a)**3)
+    
+    return P
