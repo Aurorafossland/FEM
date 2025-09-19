@@ -46,17 +46,26 @@ class Fea:
         # Calculate displacements
         P_final = buildload(X, IX, ne, P, loads, mprop)    # Build global load vector
         
-        disp, force, strain, stress, res = euler(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R)
+        disp_e, force_e, strain_e, stress_e, res_e = euler(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R)
+        disp_ec, force_ec, strain_ec, stress_ec, res_ec = euler_corrected(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R)
+        disp_nr, force_nr, strain_nr, stress_nr, res_nr = newton_raphson(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R)
+
+        dL = np.linspace(0, 0.20, 100)
+        force_curve = plotForce(IX, dL, mprop)
 
         # Plot results
-        print(f'Residual Vector: {res}')
-        plt.plot(disp[-2], force[-2], 'b-o')
+        print(f'Residual Vector: {res_ec}')
+        plt.plot(disp_e[-2], force_e[-2], 'r--x', label='Euler', markersize=8)
+        plt.plot(disp_ec[-2], force_ec[-2], 'b-o', label='Euler corrected', markersize=8)
+        plt.plot(disp_nr[-2], force_nr[-2], 'g--o', label='Newton-Raphson', markersize=8)
+        plt.plot(dL, force_curve, 'k-', label='Exact', linewidth=2)
         plt.ylabel('Load P [N]')
         plt.xlabel('Displacement D [m]')
         plt.title('Load-displacement diagram')
+        plt.legend()
         plt.grid(True)
         plt.show(block=True)
-        PlotStructure(X, IX, ne, neqn, bound, loads, disp[:, int(n_incr-1):int(n_incr)], stress)
+        PlotStructure(X, IX, ne, neqn, bound, loads, disp_ec[:, int(n_incr-1):int(n_incr)], stress)
 
 def buildload(X, IX, ne, P, loads, mprop):
     '''Update load vector with loads from input file
@@ -96,25 +105,25 @@ def buildstiff(X, IX, ne, mprop, neqn, D):
         c3 =  mprop[int(IX[e,2])-1,4]
         c4 =  mprop[int(IX[e,2])-1,5]
 
-        # Find strain and stetch of the element
-        du = D[edof[2],0] - D[edof[0],0]
-        dv = D[edof[3],0] - D[edof[1],0]
+        # Local displacement vector and linear strain displacement matrix
+        de = np.array([[D[2*n1, 0]], [D[2*n1 + 1, 0]], [D[2*n2, 0]], [D[2*n2 + 1, 0]]])
+        B_0 = (1/L**2) * np.array([[-dx], [-dy], [dx], [dy]])
 
-        eps = (dx*du + dy*dv)/L        
+        # Non-linear strain and tangent modulus
+        eps = np.matmul(np.transpose(B_0), de)
         lam = 1 + c4 * eps
+        Et = c4*(c1*(1+2*lam**(-3))+3*c2*lam**(-4)+3*c3*(-1+lam**2-2*lam**(-3)+2*lam**(-4)))
 
         # Element stiffness matrix
-        Et = c4*(c1*(1+2*lam**(-3))+3*c2*lam**(-4)+3*c3*(-1+lam**2-2*lam**(-3)+2*lam**(-4)))
-        ke = (Ae*Et/L**3) * np.array([[dx**2, dx*dy, -dx**2, -dx*dy],
-                                      [dx*dy, dy**2, -dx*dy, -dy**2],
-                                      [-dx**2, -dx*dy, dx**2, dx*dy],
-                                      [-dx*dy, -dy**2, dx*dy, dy**2]])
+        ke = Ae*Et*L * np.matmul(B_0, np.transpose(B_0))
         
         # Assemble into global stiffness matrix
         for i in range(4):
             for j in range(4):
                 K[edof[i], edof[j]] += ke[i, j]
+
     return K
+
 
 def enforce(K, P, bound):
     '''Enforce boundary conditions
@@ -124,7 +133,7 @@ def enforce(K, P, bound):
     returns modified stiffness matrix and load vector
     '''
     # Very high stiffness for addition to diagonals
-    alpha = 1e12 * np.max(K.diagonal())
+    alpha = 1e9 * np.max(K.diagonal())
 
     K_mod = K.copy()
     P_mod = P.copy()
@@ -144,11 +153,17 @@ def enforce(K, P, bound):
     return K_mod, P_mod 
 
 
-def recover(mprop, X, IX, D, ne, strain, stress, R):
+def recover(mprop, X, IX, D, ne):
     '''Recover residuals, strains and stresses
     Calculate strains and stresses in each element.
     
     returns residual, strain and stress vectors'''
+
+    strain = np.zeros((ne, 1))
+    stress = np.zeros((ne, 1))
+
+    neqn = D.shape[0]
+    R_out = np.zeros((neqn, 1))
 
     for e in range(ne):
 
@@ -167,10 +182,9 @@ def recover(mprop, X, IX, D, ne, strain, stress, R):
         n2 = int(IX[e, 1]) - 1
         midx = int(IX[e, 2]) - 1
         
-        E = mprop[midx, 0]  
         A = mprop[midx, 1]     
         # Local displacement vector
-        de = np.array([D[2*n1, 0], D[2*n1 + 1, 0], D[2*n2, 0], D[2*n2 + 1, 0]])
+        de = np.array([[D[2*n1, 0]], [D[2*n1 + 1, 0]], [D[2*n2, 0]], [D[2*n2 + 1, 0]]])
 
         # Linear strain displacement matrix
         B_0 = (1/L**2) * np.array([[-dx], [-dy], [dx], [dy]])
@@ -187,17 +201,17 @@ def recover(mprop, X, IX, D, ne, strain, stress, R):
         sig = c1 * (lam - lam**(-2)) \
             + c2 * (1 - lam**(-3)) \
             + c3 * (1 - 3*lam + lam**3 - 2*lam**(-3) + 3*lam**(-2))
-        
-        strain[e, 0] += eps
-        stress[e, 0] += sig
+
+        strain[e, 0] = eps
+        stress[e, 0] = sig
         
         # Residuals
-        R_int = B_0 * sig * A * L
+        R_int = B_0 * sig * A * L 
 
-        R[2*n1:2*n1+2, 0] += R_int[0:2, 0]
-        R[2*n2:2*n2+2, 0] += R_int[2:4, 0]
+        R_out[2*n1:2*n1+2, 0] += R_int[0:2, 0]
+        R_out[2*n2:2*n2+2, 0] += R_int[2:4, 0]
         
-    return strain, stress, R
+    return strain, stress, R_out
 
 def PlotStructure(X, IX, ne, neqn, bound, loads, D, stress):
         '''Plot undeformed and deformed structure
@@ -240,7 +254,11 @@ def PlotStructure(X, IX, ne, neqn, bound, loads, D, stress):
 
 
 def euler(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R):
-    
+    '''Euler incremental-iterative method
+    Solves the nonlinear problem using the Euler incremental-iterative method.
+
+    Returns displacement, force, strain, stress and residual vectors.
+    '''
     # Initialize arrays
     dP = P_final/n_incr
     
@@ -255,9 +273,111 @@ def euler(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R):
         Kmatr = buildstiff(X, IX, ne, mprop, neqn, D[:, n-1:n])
         Kmatr, P[:, n:n+1] = enforce(Kmatr, P[:, n:n+1], bound)
 
-        D[:, n:n+1] = D[:, n-1:n] + spsolve(Kmatr, P[:, n:n+1]).reshape(-1, 1)
+        D[:, n:n+1] = D[:, n-1:n] + spsolve(Kmatr, dP).reshape(-1, 1)
     
     disp = D[:, int(n_incr-1):int(n_incr)]
-    strain, stress, R = recover(mprop, X, IX, disp, ne, strain, stress, R)
+    strain, stress, R = recover(mprop, X, IX, disp, ne)
 
     return D, P, strain, stress, R
+
+
+def euler_corrected(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R):
+    '''Euler incremental-iterative method with correction
+    Solves the nonlinear problem using the Euler incremental-iterative method with a correction step.
+
+    Returns displacement, force, strain, stress and residual vectors.
+    '''
+    # Initialize arrays
+    dP = P_final/n_incr
+    
+    P = np.zeros((neqn, int(n_incr + 1)))
+    D = np.zeros((neqn, int(n_incr + 1)))
+    R = np.zeros((neqn, int(n_incr + 1)))
+    
+    # Calculate displacements
+    for n in range(1, int(n_incr + 1)):
+        P[:, n:n+1] = P[:, n-1:n] + dP
+
+        Kmatr = buildstiff(X, IX, ne, mprop, neqn, D[:, n-1:n])
+        Kmatr, P[:, n:n+1] = enforce(Kmatr, P[:, n:n+1], bound)
+        
+        DeltaD = spsolve(Kmatr, (dP - R[:, n-1:n])).reshape(-1,1)
+        D[:, n:n+1] = D[:, n-1:n] + DeltaD
+
+        _, __, R_int = recover(mprop, X, IX, D[:, n:n+1], ne)
+        R[:, n:n+1] = R_int - P[:, n:n+1]
+
+    disp = D[:, int(n_incr-1):int(n_incr)]
+    strain, stress, R = recover(mprop, X, IX, disp, ne)
+
+    return D, P, strain, stress, R
+
+
+def newton_raphson(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R):
+    '''Newton-Raphson method
+    Solves the nonlinear problem using the Newton-Raphson method.
+
+    Returns displacement, force, strain, stress and residual vectors.
+    '''    
+    # Initialize arrays
+    dP = P_final/n_incr
+    
+    P = np.zeros((neqn, int(n_incr + 1)))
+    D = np.zeros((neqn, int(n_incr + 1)))
+
+    # Parameterrs for equilibrium iteration
+    limit = 1e-3
+    max_iter = 70
+    alpha = 1
+    
+    # Calculate displacements
+    for n in range(1, int(n_incr + 1)):
+
+        # Initialize load step
+        P[:, n:n+1] = P[:, n-1:n] + dP
+        Dn = np.zeros((neqn, int(max_iter + 1)))
+
+        for i in range(1, int(max_iter + 1)): 
+
+            # Calculate residual and check convergence
+            _, __, R_int = recover(mprop, X, IX, Dn[:, i-1:i], ne)
+            R_i = R_int - P[:, n:n+1]
+
+            if np.linalg.norm(R_i) < limit: 
+                break
+
+            # Calculate tangent stiffness matrix and solve system
+            K = buildstiff(X, IX, ne, mprop, neqn, Dn[:, i-1:i])
+
+            K , _ = enforce(K, P, bound)
+            dD = spsolve(K, R_i).reshape(-1, 1)
+
+            Dn[:, i:i+1] = Dn[:, i-1:i] - dD * alpha
+        
+        # Update displacements
+        D[:, n:n+1] = Dn[:, i:i+1]
+    
+    # Final recovery of strains and stresses
+    disp = D[:, int(n_incr):int(n_incr+1)]
+    strain, stress, R = recover(mprop, X, IX, disp, ne)
+
+    return D, P, strain, stress, R
+
+def plotForce(IX, dl, mprop): 
+    l0 = 3
+    
+    c1 =  mprop[int(IX[0,2])-1,2]
+    c2 =  mprop[int(IX[0,2])-1,3]
+    c3 =  mprop[int(IX[0,2])-1,4]
+    c4 =  mprop[int(IX[0,2])-1,5]
+    
+    eps = dl/l0
+    
+    lam = 1 + c4*eps
+    sig = c1 * (lam - lam**(-2)) \
+        + c2 * (1 - lam**(-3)) \
+        + c3 * (1 - 3*lam + lam**3 - 2*lam**(-3) + 3*lam**(-2))
+    
+    A = mprop[int(IX[0,2])-1,1]
+    
+    return sig * A
