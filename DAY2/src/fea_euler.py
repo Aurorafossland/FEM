@@ -127,32 +127,63 @@ def buildstiff(X, IX, ne, mprop, neqn, D):
     return K
 
 
+# def enforce(K, P, bound):
+#     '''Enforce boundary conditions
+#     Enforces boundary conditions by modifying the global stiffness matrix.
+#     Uses the big number method.
+
+#     returns modified stiffness matrix and load vector
+#     '''
+#     # Very high stiffness for addition to diagonals
+#     alpha = 1e9 * np.max(K.diagonal())
+
+#     K_mod = K.copy()
+#     P_mod = P.copy()
+
+#     for i in range(bound.shape[0]):
+#         node, ldof, disp = int(bound[i,0]), int(bound[i,1]), bound[i,2]
+
+#         # Calculate global dof
+#         dof = (node - 1) * 2 + (ldof - 1)
+
+#         # Check wether boundry stiffness is given
+#         if disp:
+#             K_mod[dof, dof] += disp
+#         else:
+#             K_mod[dof, dof] += alpha
+
+#     return K_mod.tocsc(), P_mod 
+
+
 def enforce(K, P, bound):
-    '''Enforce boundary conditions
-    Enforces boundary conditions by modifying the global stiffness matrix.
-    Uses the big number method.
+    '''Enforce boundary conditions using direct elimination.
+    If K is None, only modifies P.
 
-    returns modified stiffness matrix and load vector
+    Returns modified stiffness matrix and load vector
     '''
-    # Very high stiffness for addition to diagonals
-    alpha = 1e9 * np.max(K.diagonal())
-
-    K_mod = K.copy()
+    if K is not None:
+        K_mod = K.copy().tolil()  # Convert to LIL for efficient row/col assignment
+    else:
+        K_mod = None
     P_mod = P.copy()
 
     for i in range(bound.shape[0]):
         node, ldof, disp = int(bound[i,0]), int(bound[i,1]), bound[i,2]
-
-        # Calculate global dof
         dof = (node - 1) * 2 + (ldof - 1)
 
-        # Check wether boundry stiffness is given
-        if disp:
-            K_mod[dof, dof] += disp
-        else:
-            K_mod[dof, dof] += alpha
+        if K_mod is not None:
+            # Zero out row and column, set diagonal to 1
+            K_mod[dof, :] = 0
+            K_mod[:, dof] = 0
+            K_mod[dof, dof] = 1
 
-    return K_mod.tocsc(), P_mod 
+        # Set prescribed displacement in load vector
+        P_mod[dof, 0] = disp
+
+    if K_mod is not None:
+        return K_mod.tocsc(), P_mod
+    else:
+        return None, P_mod
 
 
 def recover(mprop, X, IX, D, ne):
@@ -301,13 +332,14 @@ def euler_corrected(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stre
         P[:, n:n+1] = P[:, n-1:n] + dP
 
         Kmatr = buildstiff(X, IX, ne, mprop, neqn, D[:, n-1:n])
-        Kmatr, P[:, n:n+1] = enforce(Kmatr, P[:, n:n+1], bound)
+        Kmatr, dR = enforce(Kmatr, (dP - R[:, n-1:n]), bound)
         
-        DeltaD = spsolve(Kmatr, (dP - R[:, n-1:n])).reshape(-1,1)
+        DeltaD = spsolve(Kmatr, dR).reshape(-1,1)
         D[:, n:n+1] = D[:, n-1:n] + DeltaD
 
         _, __, R_int = recover(mprop, X, IX, D[:, n:n+1], ne)
-        R[:, n:n+1] = R_int - P[:, n:n+1]
+        R[:, n:n+1] += R_int - P[:, n:n+1]
+
 
     disp = D[:, int(n_incr-1):int(n_incr)]
     strain, stress, R = recover(mprop, X, IX, disp, ne)
@@ -315,110 +347,243 @@ def euler_corrected(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stre
     return D, P, strain, stress, R
 
 
-def newton_raphson(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R):
-    '''Newton-Raphson method
-    Solves the nonlinear problem using the Newton-Raphson method.
+# def newton_raphson(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R):
+#     '''Newton-Raphson method
+#     Solves the nonlinear problem using the Newton-Raphson method.
 
-    Returns displacement, force, strain, stress and residual vectors.
-    '''    
-    # Initialize arrays
-    dP = P_final/n_incr
+#     Returns displacement, force, strain, stress and residual vectors.
+#     '''    
+#     # Initialize arrays
+#     dP = P_final/n_incr
     
+#     P = np.zeros((neqn, int(n_incr + 1)))
+#     D = np.zeros((neqn, int(n_incr + 1)))
+
+#     # Parameterrs for equilibrium iteration
+#     limit = 1e-3
+#     max_iter = 70
+#     alpha = 1
+    
+#     # Calculate displacements
+#     for n in range(1, int(n_incr + 1)):
+
+#         # Initialize load step
+#         P[:, n:n+1] = P[:, n-1:n] + dP
+#         Dn = np.zeros((neqn, int(max_iter + 1)))
+
+#         for i in range(1, int(max_iter + 1)): 
+
+#             # Calculate residual and check convergence
+#             _, __, R_int = recover(mprop, X, IX, Dn[:, i-1:i], ne)
+#             R_i = R_int - P[:, n:n+1]
+
+#             _, R_i = enforce(None, R_i, bound)
+
+#             if np.linalg.norm(R_i) < limit*np.linalg.norm(P_final): 
+#                 break
+
+#             # Calculate tangent stiffness matrix and solve system
+#             K = buildstiff(X, IX, ne, mprop, neqn, Dn[:, i-1:i])
+
+#             K , R_i = enforce(K, R_i, bound)
+#             dD = spsolve(K, -R_i).reshape(-1, 1)
+
+#             Dn[:, i:i+1] = Dn[:, i-1:i] - dD * alpha
+
+#             print(f"  load {n}, iter {i}, ||R|| = {np.linalg.norm(R_i[:,]):.3e}, ||P|| = {np.linalg.norm(P[:, n:n+1]):.3e}")
+        
+#         # Update displacements
+#         D[:, n:n+1] = Dn[:, i:i+1]
+    
+#     # Final recovery of strains and stresses
+#     disp = D[:, int(n_incr):int(n_incr+1)]
+#     strain, stress, R = recover(mprop, X, IX, disp, ne)
+
+#     return D, P, strain, stress, R
+
+
+# def newton_raphson_modified_chol(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R):
+#     '''Modified Newton-Raphson method with sparse Cholesky factorization.
+#     Factorizes K once per load step and reuses it in all equilibrium iterations.
+
+#     Returns displacement, force, strain, stress and residual vectors.
+#     '''    
+#     # Initialize arrays
+#     dP = P_final / n_incr
+    
+#     P = np.zeros((neqn, int(n_incr + 1)))
+#     D = np.zeros((neqn, int(n_incr + 1)))
+
+#     # Parameters for equilibrium iteration
+#     limit = 1e-3
+#     max_iter = 70
+#     alpha = 1.0
+    
+#     # Loop over load increments
+#     for n in range(1, int(n_incr + 1)):
+#         # Apply incremental load
+#         P[:, n:n+1] = P[:, n-1:n] + dP
+#         Dn = np.zeros((neqn, int(max_iter + 1)))
+
+#         # --- Factorize stiffness matrix ONCE per load step ---
+#         K = buildstiff(X, IX, ne, mprop, neqn, Dn[:, 0:1])
+#         K, _ = enforce(K, P[:, n:n+1], bound)
+
+#         # Cholesky factorization (reusable solver)
+#         factor = cholesky(K)
+
+#         # Equilibrium iterations
+#         for i in range(1, int(max_iter + 1)):
+#             # Compute residual
+#             _, __, R_int = recover(mprop, X, IX, Dn[:, i-1:i], ne)
+#             R_i = R_int - P[:, n:n+1]
+
+#             # Check convergence
+#             if np.linalg.norm(R_i) < limit:
+#                 break
+
+#             # Solve using Cholesky factorization
+#             dD = factor(R_i).reshape(-1, 1)
+
+#             # Update displacement
+#             Dn[:, i:i+1] = Dn[:, i-1:i] - dD * alpha
+
+#         # Store converged displacement for load step n
+#         D[:, n:n+1] = Dn[:, i:i+1]
+    
+#     # Final recovery of strains and stresses
+#     disp = D[:, int(n_incr):int(n_incr+1)]
+#     strain, stress, R = recover(mprop, X, IX, disp, ne)
+
+#     return D, P, strain, stress, R
+
+def newton_raphson(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R):
+    """
+    Standard (full) Newton-Raphson with consistent tangent.
+    Key fixes:
+      - use current load column (P_current) everywhere
+      - explicitly solve K * delta = -R and update D += delta
+      - zero residual at constrained DOFs via apply_bc_to_vector
+      - print norms relative to current load
+    """
+    dP = P_final / n_incr
     P = np.zeros((neqn, int(n_incr + 1)))
     D = np.zeros((neqn, int(n_incr + 1)))
 
-    # Parameterrs for equilibrium iteration
-    limit = 1e-3
+    limit = 1e-6            # tighten tolerance for nonlinear material
     max_iter = 70
-    alpha = 1
-    
-    # Calculate displacements
+    alpha = 1.0
+
     for n in range(1, int(n_incr + 1)):
-
-        # Initialize load step
         P[:, n:n+1] = P[:, n-1:n] + dP
-        Dn = np.zeros((neqn, int(max_iter + 1)))
+        P_current = P[:, n:n+1]
 
-        for i in range(1, int(max_iter + 1)): 
+        # start iterate from previous converged solution (load control continuation)
+        Dn_prev = D[:, n-1:n].copy()
+        D_iter = Dn_prev.copy()
 
-            # Calculate residual and check convergence
-            _, __, R_int = recover(mprop, X, IX, Dn[:, i-1:i], ne)
-            R_i = R_int - P[:, n:n+1]
+        for i in range(1, int(max_iter + 1)):
+            # compute internal forces (and R_int)
+            _, __, R_int = recover(mprop, X, IX, D_iter, ne)   # R_int is (neqn,1)
+            R_i = R_int - P_current                             # residual (full DOFs)
+            # apply BCs to residual: equations for constrained DOFs are dropped -> set residual to 0
+            _, R_i = enforce(None, R_i, bound)
 
-            if np.linalg.norm(R_i) < limit: 
+            normR = np.linalg.norm(R_i)
+            normP = max(1.0, np.linalg.norm(P_current))
+            if normR < limit * normP:
+                # converged for this load step
                 break
 
-            # Calculate tangent stiffness matrix and solve system
-            K = buildstiff(X, IX, ne, mprop, neqn, Dn[:, i-1:i])
+            # tangent stiffness at current iterate
+            K = buildstiff(X, IX, ne, mprop, neqn, D_iter)
+            # enforce BCs on K and build consistent RHS for solving (P_current not needed here)
+            K_mod, _ = enforce(K, P_current, bound)  # enforce will zero rows/cols and diag=1
+            # solve K_mod * delta = -R_i
+            delta = spsolve(K_mod, -R_i).reshape(-1, 1)
+            # update
+            D_iter = D_iter + alpha * delta
 
-            K , _ = enforce(K, P, bound)
-            dD = spsolve(K, R_i).reshape(-1, 1)
+            if i % 5 == 0 or i == 1:
+                print(f"  load {n:3d}, iter {i:3d}, ||R||={normR:.3e}, ||P||={normP:.3e}, ||δ||={np.linalg.norm(delta):.3e}")
 
-            Dn[:, i:i+1] = Dn[:, i-1:i] - dD * alpha
-        
-        # Update displacements
-        D[:, n:n+1] = Dn[:, i:i+1]
-    
-    # Final recovery of strains and stresses
-    disp = D[:, int(n_incr):int(n_incr+1)]
+        # store converged iterate for this load step
+        D[:, n:n+1] = D_iter
+        print(f"Load step {n}, iterations {i}, ||R||={np.linalg.norm(R_i):.3e}, ||P||={np.linalg.norm(P_current):.3e}")
+
+    # return last increment's converged displacement (consistent with other methods)
+    disp = D[:, int(n_incr-1):int(n_incr)]
     strain, stress, R = recover(mprop, X, IX, disp, ne)
-
     return D, P, strain, stress, R
 
 
 def newton_raphson_modified_chol(X, IX, ne, mprop, bound, n_incr, neqn, P_final, strain, stress, R):
-    '''Modified Newton-Raphson method with sparse Cholesky factorization.
-    Factorizes K once per load step and reuses it in all equilibrium iterations.
+    """
+    Modified Newton: factorize tangent once per load increment at the beginning of the increment,
+    then reuse the factor in iterations for that increment.
 
-    Returns displacement, force, strain, stress and residual vectors.
-    '''    
-    # Initialize arrays
+    Important notes:
+      - Factorization is performed on K_mod (with BCs applied).
+      - Each residual vector R_i must have constrained DOFs zeroed before solve.
+      - Solve K_mod * delta = -R_i using the factor.
+      - cholesky() expects symmetric positive definite matrices. If your tangent is not SPD,
+        consider using a sparse LU or fall back to spsolve.
+    """
     dP = P_final / n_incr
-    
     P = np.zeros((neqn, int(n_incr + 1)))
     D = np.zeros((neqn, int(n_incr + 1)))
 
-    # Parameters for equilibrium iteration
-    limit = 1e-3
+    limit = 1e-6
     max_iter = 70
     alpha = 1.0
-    
-    # Loop over load increments
+
     for n in range(1, int(n_incr + 1)):
-        # Apply incremental load
         P[:, n:n+1] = P[:, n-1:n] + dP
-        Dn = np.zeros((neqn, int(max_iter + 1)))
+        P_current = P[:, n:n+1]
 
-        # --- Factorize stiffness matrix ONCE per load step ---
-        K = buildstiff(X, IX, ne, mprop, neqn, Dn[:, 0:1])
-        K, _ = enforce(K, P[:, n:n+1], bound)
+        # initial guess = previous converged solution
+        Dn_prev = D[:, n-1:n].copy()
+        D_iter = Dn_prev.copy()
 
-        # Cholesky factorization (reusable solver)
-        factor = cholesky(K)
+        # build and factorize tangent at the beginning of the increment (modified Newton)
+        K0 = buildstiff(X, IX, ne, mprop, neqn, D_iter)
+        K_mod, _ = enforce(K0, P_current, bound)  # apply BCs to K
+        # Attempt Cholesky; if it fails, fall back to spsolve (LU)
+        try:
+            factor = cholesky(K_mod)   # factor is callable: factor(rhs) solves K_mod x = rhs
+            use_factor = 'chol'
+        except Exception as e:
+            # fallback: create a simple wrapper that calls spsolve on K_mod
+            print("Cholesky factorization failed, falling back to spsolve (LU). Exception:", e)
+            from functools import partial
+            def lu_solve(rhs):
+                return spsolve(K_mod, rhs)
+            factor = lu_solve
+            use_factor = 'spsolve'
 
-        # Equilibrium iterations
         for i in range(1, int(max_iter + 1)):
-            # Compute residual
-            _, __, R_int = recover(mprop, X, IX, Dn[:, i-1:i], ne)
-            R_i = R_int - P[:, n:n+1]
+            # residual at current iterate
+            _, __, R_int = recover(mprop, X, IX, D_iter, ne)
+            R_i = R_int - P_current
+            # apply BCs to residual before solve
+            _, R_i = enforce(None, R_i, bound)
 
-            # Check convergence
-            if np.linalg.norm(R_i) < limit:
+            normR = np.linalg.norm(R_i)
+            if normR < limit * max(1.0, np.linalg.norm(P_current)):
                 break
 
-            # Solve using Cholesky factorization
-            dD = factor(R_i).reshape(-1, 1)
+            # solve K_mod * delta = -R_i using factor
+            delta = factor(-R_i).reshape(-1,1)
+            D_iter = D_iter + alpha * delta
 
-            # Update displacement
-            Dn[:, i:i+1] = Dn[:, i-1:i] - dD * alpha
+            if i % 5 == 0 or i == 1:
+                print(f"  (mod) load {n:3d}, iter {i:3d}, ||R||={normR:.3e}, ||δ||={np.linalg.norm(delta):.3e}, solver={use_factor}")
 
-        # Store converged displacement for load step n
-        D[:, n:n+1] = Dn[:, i:i+1]
-    
-    # Final recovery of strains and stresses
-    disp = D[:, int(n_incr):int(n_incr+1)]
+        D[:, n:n+1] = D_iter
+        print(f"(mod) Load step {n}, iterations {i}, ||R||={np.linalg.norm(R_i):.3e}, ||P||={np.linalg.norm(P_current):.3e}")
+
+    disp = D[:, int(n_incr-1):int(n_incr)]
     strain, stress, R = recover(mprop, X, IX, disp, ne)
-
     return D, P, strain, stress, R
 
 
